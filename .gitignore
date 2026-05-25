@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+*.log
+.DS_Store
+
+# Model files (too large for GitHub)
+*.task
+
+# Reports / generated files
+reports/*.pdf
+alerts/*.wav
+
+# Frontend node_modules (handled by Vercel)
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# General
+.DS_Store
+Thumbs.db
