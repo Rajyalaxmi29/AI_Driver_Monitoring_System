@@ -1,5 +1,12 @@
-export default function Component() {
+"use client";
+
+import LumaBar from "@/components/ui/futuristic-nav";
+
+export default function DemoOne() {
   return (
-    <div className="absolute top-0 z-[-2] h-screen w-screen bg-neutral-950 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.3),rgba(255,255,255,0))]"></div>
+    <div className="relative min-h-[200px] w-full flex items-center justify-center p-8 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">
+      <LumaBar />
+      <span className="text-xs text-gray-400 font-mono">Futuristic LumaBar (Bottom Floating Navbar) Demo</span>
+    </div>
   );
 }

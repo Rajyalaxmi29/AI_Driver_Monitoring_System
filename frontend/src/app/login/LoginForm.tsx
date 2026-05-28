@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function LoginForm() {
+  const router = useRouter();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [showPass, setShowPass] = useState(false);
 
@@ -46,7 +48,7 @@ export default function LoginForm() {
         </div>
 
         {/* Form */}
-        <form className="flex flex-col gap-4" onSubmit={(e) => e.preventDefault()}>
+        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); router.push("/dashboard"); }}>
           {mode === "signup" && (
             <div className="animate-fade-in-down delay-400">
               <InputField label="Full Name" type="text" placeholder="John Doe" />

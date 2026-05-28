@@ -129,6 +129,14 @@
   }
 }
 
+/* ── Dashboard: allow light bg override per-page ── */
+.amats-light body,
+.amats-light {
+  background: #f0f2f5 !important;
+  color: #111827 !important;
+}
+
+
 /* ── Hide Next.js dev indicator N icon ── */
 nextjs-portal {
   display: none !important;
@@ -555,4 +563,237 @@ canvas[data-engine] {
   .home-nav   { gap: 20px; }
 
   .login-panel { width: 380px; min-width: 340px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CYBERPUNK DASHBOARD STYLES
+══════════════════════════════════════════════════════════════════ */
+
+/* Glassmorphism card */
+.glass-card {
+  background: linear-gradient(135deg, rgba(10,10,30,0.85) 0%, rgba(5,5,20,0.92) 100%);
+  border: 1px solid rgba(0, 200, 255, 0.08);
+  border-radius: 1.125rem;
+  box-shadow:
+    0 0 40px rgba(0, 0, 200, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.glass-card:hover {
+  border-color: rgba(0, 200, 255, 0.14);
+  box-shadow:
+    0 0 60px rgba(0, 80, 255, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Neon text glow utilities */
+.neon-cyan  { color: #00dcff; text-shadow: 0 0 12px rgba(0, 220, 255, 0.6); }
+.neon-blue  { color: #4488ff; text-shadow: 0 0 12px rgba(68, 136, 255, 0.6); }
+.neon-purple { color: #a855f7; text-shadow: 0 0 12px rgba(168, 85, 247, 0.6); }
+.neon-red   { color: #ef4444; text-shadow: 0 0 12px rgba(239, 68, 68, 0.6); }
+.neon-green { color: #22c55e; text-shadow: 0 0 12px rgba(34, 197, 94, 0.6); }
+
+/* Scrollbar hide */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* Loading grid background */
+.loading-grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 200, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 200, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* Radar scan animation */
+@keyframes radarSweep {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.radar-sweep {
+  animation: radarSweep 3s linear infinite;
+  transform-origin: center;
+}
+
+/* Neon pulse border */
+@keyframes neonPulse {
+  0%, 100% { box-shadow: 0 0 0px rgba(0, 220, 255, 0); }
+  50%       { box-shadow: 0 0 20px rgba(0, 220, 255, 0.3); }
+}
+.neon-pulse { animation: neonPulse 2s ease-in-out infinite; }
+
+/* Danger pulse */
+@keyframes dangerPulse {
+  0%, 100% { box-shadow: 0 0 0px rgba(239, 68, 68, 0); border-color: rgba(239, 68, 68, 0.3); }
+  50%       { box-shadow: 0 0 30px rgba(239, 68, 68, 0.5); border-color: rgba(239, 68, 68, 0.8); }
+}
+.danger-pulse { animation: dangerPulse 1s ease-in-out infinite; }
+
+/* Floating animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-6px); }
+}
+.float-anim { animation: float 4s ease-in-out infinite; }
+
+/* Holographic shimmer */
+@keyframes holoShimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.holo-text {
+  background: linear-gradient(
+    90deg,
+    #00dcff 0%,
+    #a855f7 30%,
+    #00dcff 50%,
+    #a855f7 70%,
+    #00dcff 100%
+  );
+  background-size: 400px 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: holoShimmer 4s linear infinite;
+}
+
+/* Conic gradient for canvas polyfill */
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* Scanline effect overlay */
+.scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Dashboard specific layout override */
+.dashboard-layout {
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   LEVER SWITCH CUSTOM STYLES
+   ══════════════════════════════════════════════════════════════════ */
+.toggle-container {
+  --w: 52px;
+  --h: 26px;
+  position: relative;
+  width: var(--w);
+  height: var(--h);
+  display: inline-block;
+  user-select: none;
+}
+
+.toggle-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.toggle-base {
+  width: 100%;
+  height: 100%;
+  background: #cbd5e1;
+  border-radius: 9999px;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.1), 0 1px 0 rgba(255,255,255,0.8);
+  position: relative;
+  transition: background-color 0.25s ease;
+}
+
+.toggle-base-inside {
+  position: absolute;
+  inset: 1.5px;
+  background: #f1f5f9;
+  border-radius: 9999px;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+  transition: background-color 0.25s ease;
+}
+
+.toggle-input:checked ~ .toggle-base {
+  background: #10b981; /* Green base */
+}
+
+.toggle-input:checked ~ .toggle-base .toggle-base-inside {
+  background: #ecfdf5; /* Light green inside */
+}
+
+.toggle-handle-wrapper {
+  position: absolute;
+  top: 1.5px;
+  left: 1.5px;
+  width: 23px;
+  height: 23px;
+  z-index: 5;
+  transition: transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+  pointer-events: none;
+}
+
+.toggle-input:checked ~ .toggle-handle-wrapper {
+  transform: translateX(26px);
+}
+
+.toggle-handle {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(to bottom, #ffffff, #f1f5f9);
+  border-radius: 50%;
+  border: 1.5px solid #cbd5e1;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.08), inset 0 1px 0 #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.toggle-handle-knob {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #94a3b8;
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.15);
+  transition: background-color 0.25s ease;
+}
+
+.toggle-input:checked ~ .toggle-handle-wrapper .toggle-handle-knob {
+  background: #10b981; /* Glowing active indicator dot */
+  box-shadow: 0 0 6px #10b981, inset 0 1px 1px rgba(255,255,255,0.4);
+}
+
+.toggle-handle-bar-wrapper {
+  width: 2px;
+  height: 5px;
+  background: #cbd5e1;
+  margin-top: 1px;
+}
+
+.toggle-handle-bar {
+  width: 100%;
+  height: 100%;
+  background: #94a3b8;
 }

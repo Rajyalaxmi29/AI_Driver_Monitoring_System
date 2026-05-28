@@ -6,6 +6,7 @@ import subprocess
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from api_server import start_api_server, update_driver_state
 
 # --- Config & Thresholds ---
 # Default thresholds (will be adjusted if calibrated)
@@ -143,6 +144,15 @@ def main():
     is_yawn_alert = False
     is_distract_alert = False
 
+    # API tracking variables
+    total_yawns = 0
+    was_yawning = False
+    was_eyes_closed = False
+    blink_history = []
+    
+    print("Starting API Server...", flush=True)
+    start_api_server()
+
     # Voice alert rate limit timers
     last_drowsy_voice_time = 0.0
     last_distract_voice_time = 0.0
@@ -192,6 +202,7 @@ def main():
         # HUD overlay defaults
         status_text = "STATUS: ACTIVE"
         status_color = (0, 200, 0) # Green
+        api_new_alert = None
         
         if result.face_landmarks:
             face_landmarks = result.face_landmarks[0]
@@ -389,6 +400,7 @@ def main():
                 # Speak warning every 4 seconds
                 if current_time - last_drowsy_voice_time > 4.0:
                     speak("Drowsiness warning. Please stay alert.")
+                    api_new_alert = {"time": time.strftime("%H:%M:%S"), "type": "danger", "message": "Drowsiness warning. Please stay alert."}
                     last_drowsy_voice_time = current_time
                 
                 # Full frame red flashing border
@@ -405,6 +417,7 @@ def main():
                 # Speak warning every 4 seconds
                 if current_time - last_distract_voice_time > 4.0:
                     speak("Please look at the road.")
+                    api_new_alert = {"time": time.strftime("%H:%M:%S"), "type": "warning", "message": "Driver distracted. Look at the road."}
                     last_distract_voice_time = current_time
                 
                 # Full frame orange flashing border
@@ -421,12 +434,87 @@ def main():
                 # Speak warning once every 10 seconds
                 if current_time - last_yawn_voice_time > 10.0:
                     speak("Yawn detected. Consider taking a rest.")
+                    api_new_alert = {"time": time.strftime("%H:%M:%S"), "type": "info", "message": "Yawn detected. Consider taking a rest."}
                     last_yawn_voice_time = current_time
                 
                 # Draw small status bar alert
                 draw_overlay(frame, w // 2 - 130, h - 70, 260, 40, (0, 165, 255), 0.7)
                 cv2.putText(frame, "YAWN DETECTED", (w // 2 - 70, h - 45),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+            
+            # --- API Metric Tracking ---
+            eyes_open_now = avg_ear >= EAR_THRESHOLD
+            
+            # Track blinks
+            if was_eyes_closed and eyes_open_now:
+                blink_history.append(current_time)
+            was_eyes_closed = not eyes_open_now
+            
+            # Clean up blinks older than 60s to get blinks per minute
+            blink_history = [t for t in blink_history if current_time - t <= 60.0]
+            current_blink_rate = len(blink_history)
+            
+            # Track yawns
+            is_yawning_now = mar > MAR_THRESHOLD
+            if is_yawning_now and not was_yawning:
+                total_yawns += 1
+            was_yawning = is_yawning_now
+            
+            # Calculate scales (0-100)
+            if avg_ear >= baseline_ear:
+                drowsiness_level = 0
+            else:
+                drowsiness_level = min(100, max(0, ((baseline_ear - avg_ear) / (baseline_ear - EAR_THRESHOLD)) * 65))
+                
+            yaw_penalty = min(50, abs(adj_yaw) / YAW_THRESHOLD * 50)
+            pitch_penalty = min(50, abs(adj_pitch) / PITCH_THRESHOLD * 50)
+            attention_score = int(max(0, 100 - (yaw_penalty + pitch_penalty)))
+            
+            api_face_detected = True
+            # Derive phone active state (more sensitive: tilted head down OR low attention score)
+            phone_active = True if (adj_pitch < -3.5 or attention_score < 65) else False
+
+            api_status = "DROWSY" if is_drowsy_alert else "DISTRACTED" if (is_distract_alert or phone_active) else "WARNING" if (drowsiness_level > 40 or attention_score < 70) else "SAFE"
+            api_safety_score = max(0, 100 - (drowsiness_level * 0.5) - ((100 - attention_score) * 0.3))
+            
+            # Derive stress level from drowsiness and distraction
+            derived_stress = max(10, min(95, int(drowsiness_level * 0.6 + (100 - attention_score) * 0.4 + 10)))
+
+            # Smile detection (Happiness emotion) using inner mouth and mouth corners
+            p_13 = face_landmarks[13]
+            p_14 = face_landmarks[14]
+            p_61 = face_landmarks[61]
+            p_291 = face_landmarks[291]
+            smile_metric = ((p_13.y + p_14.y) / 2.0) - ((p_61.y + p_291.y) / 2.0)
+
+            # Determine emotion
+            if smile_metric > 0.010: # threshold for smile
+                emotion_state = "HAPPY"
+            elif drowsiness_level > 65:
+                emotion_state = "TIRED"
+            elif attention_score < 60:
+                emotion_state = "DISTRACTED"
+            else:
+                emotion_state = "NEUTRAL"
+
+            update_driver_state(
+                status=api_status,
+                drowsiness_level=int(drowsiness_level),
+                attention_score=attention_score,
+                blink_rate=current_blink_rate,
+                eyes_open=eyes_open_now,
+                yawn_count=total_yawns,
+                safety_score=int(api_safety_score),
+                face_detected=api_face_detected,
+                pitch=float(adj_pitch),
+                yaw=float(adj_yaw),
+                roll=float(roll),
+                stress_level=float(derived_stress),
+                phone_detected=phone_active,
+                accident_detected=False,
+                emotion=emotion_state,
+                new_alert=api_new_alert
+            )
 
         else:
             # Face not detected
@@ -445,6 +533,25 @@ def main():
             draw_overlay(frame, w // 2 - 160, h // 2 - 30, 320, 60, (0, 0, 0), 0.6)
             cv2.putText(frame, "FACE OUT OF FRAME", (w // 2 - 110, h // 2 + 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2, cv2.LINE_AA)
+            
+            # API Update when no face
+            update_driver_state(
+                status="DISTRACTED",
+                drowsiness_level=0,
+                attention_score=0,
+                blink_rate=0,
+                eyes_open=False,
+                yawn_count=total_yawns if 'total_yawns' in locals() else 0,
+                safety_score=0,
+                face_detected=False,
+                pitch=0.0,
+                yaw=0.0,
+                roll=0.0,
+                stress_level=0.0,
+                phone_detected=False,
+                accident_detected=False,
+                emotion="NEUTRAL"
+            )
 
         # --- Top HUD Header Bar ---
         draw_overlay(frame, 0, 0, w, 45, (15, 15, 15), 0.8)
