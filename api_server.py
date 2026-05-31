@@ -89,16 +89,16 @@ def update_driver_state(
 
 def run_server():
     """Run Flask in a background thread (non-blocking)."""
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
 
 
 def start_api_server():
     """Call this at the start of your driver_monitor.py"""
     thread = threading.Thread(target=run_server, daemon=True)
     thread.start()
-    print("[API] Server started at http://localhost:5000/api/status")
+    print("[API] Server started at http://localhost:5005/api/status")
 
 
 if __name__ == "__main__":
     print("Starting API server standalone (for testing)...")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5005, debug=True)

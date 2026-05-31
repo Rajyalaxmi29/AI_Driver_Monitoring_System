@@ -12,20 +12,17 @@ class FatigueCalculator:
         self.steering_direction = 1 # 1 for right, -1 for left
 
     def calculate_attention_score(self, ear, is_drowsy, yaw, pitch, phone_detected):
-        """Calculates attention percentage based on pose, eye state, and phone presence."""
+        """Calculates attention percentage based on pose and eye state only.
+        Phone detection is handled as a separate independent alert."""
         score = 100.0
-        
-        # 1. Deduct for phone detection
-        if phone_detected:
-            score -= 40.0
             
-        # 2. Deduct for eye closure / drowsiness
+        # 1. Deduct for eye closure / drowsiness
         if is_drowsy:
             score -= 35.0
         elif ear < 0.20:
             score -= 15.0
             
-        # 3. Deduct for looking away (head pose distraction)
+        # 2. Deduct for looking away (head pose distraction)
         pose_offset = max(0, abs(yaw) - 10) + max(0, abs(pitch) - 8)
         score -= min(35.0, pose_offset * 1.5)
         

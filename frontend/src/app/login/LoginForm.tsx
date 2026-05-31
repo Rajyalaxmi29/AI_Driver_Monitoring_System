@@ -48,7 +48,7 @@ export default function LoginForm() {
         </div>
 
         {/* Form */}
-        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); router.push("/dashboard"); }}>
+        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); router.push("/inspection"); }}>
           {mode === "signup" && (
             <div className="animate-fade-in-down delay-400">
               <InputField label="Full Name" type="text" placeholder="John Doe" />

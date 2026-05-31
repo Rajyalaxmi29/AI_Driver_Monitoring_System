@@ -8,6 +8,15 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from api_server import start_api_server, update_driver_state
 
+# Wrap YOLOv8 imports to handle environment PyTorch DLL load failures gracefully
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except Exception as e:
+    YOLO_AVAILABLE = False
+    print("Warning: YOLOv8 / PyTorch failed to load. Mobile phone detection will be disabled.", flush=True)
+
+
 # --- Config & Thresholds ---
 # Default thresholds (will be adjusted if calibrated)
 EAR_THRESHOLD = 0.22  # Eye Aspect Ratio threshold for drowsiness
@@ -135,14 +144,33 @@ def main():
     detector = vision.FaceLandmarker.create_from_options(options)
     print("MediaPipe Face Landmarker initialized.", flush=True)
 
+    # Initialize YOLOv8 Model (downloads automatically if not cached)
+    yolo_model = None
+    if YOLO_AVAILABLE:
+        try:
+            print("Initializing YOLOv8 model...", flush=True)
+            yolo_model = YOLO("yolov8n.pt")
+            print("YOLOv8 model initialized.", flush=True)
+        except Exception as e:
+            yolo_model = None
+            print("Warning: YOLOv8 model initialization failed.", flush=True)
+
     # State variables for warning timers
     drowsy_start_time = None
     yawn_start_time = None
     distract_start_time = None
+    phone_start_time = None
     
     is_drowsy_alert = False
     is_yawn_alert = False
     is_distract_alert = False
+    is_phone_alert = False
+
+    phone_detected_state = False
+    phone_box_coords = None
+    phone_confirm_count = 0          # consecutive YOLO windows where phone seen
+    PHONE_CONFIRM_NEEDED = 3         # require 3 consecutive detections before alerting
+    frame_counter = 0
 
     # API tracking variables
     total_yawns = 0
@@ -157,6 +185,7 @@ def main():
     last_drowsy_voice_time = 0.0
     last_distract_voice_time = 0.0
     last_yawn_voice_time = 0.0
+    last_phone_voice_time = 0.0
 
     # Calibration variables
     is_calibrating = False
@@ -187,9 +216,44 @@ def main():
             print("Ignoring empty camera frame. (Please ensure webcam is connected and not in use)", flush=True)
             continue
         
+        frame_counter += 1
         # Mirror image for natural user preview
         frame = cv2.flip(frame, 1)
         h, w, _ = frame.shape
+        
+        # --- YOLOv8 Mobile Phone Detection (Every 6 frames to keep GUI/detection loop lag-free) ---
+        if yolo_model is not None and frame_counter % 6 == 0:
+            phone_detected_this_frame = False
+            try:
+                yolo_results = yolo_model(frame, verbose=False)
+                for r in yolo_results:
+                    for box in r.boxes:
+                        cls_idx = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        # COCO class 67 is 'cell phone' — use high threshold to reduce false positives
+                        if cls_idx == 67 and conf > 0.70:
+                            phone_detected_this_frame = True
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            phone_box_coords = (x1, y1, x2, y2, conf)
+                            break
+            except Exception as e:
+                print("Warning: YOLOv8 inference failed.", flush=True)
+
+            # Require PHONE_CONFIRM_NEEDED consecutive detections before raising alert
+            if phone_detected_this_frame:
+                phone_confirm_count = min(phone_confirm_count + 1, PHONE_CONFIRM_NEEDED)
+            else:
+                phone_confirm_count = 0
+                phone_box_coords = None   # clear stale box immediately
+
+            phone_detected_state = (phone_confirm_count >= PHONE_CONFIRM_NEEDED)
+
+        # Draw phone bounding box on intermediate frames if detected
+        if phone_detected_state and phone_box_coords is not None:
+            x1, y1, x2, y2, conf = phone_box_coords
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            cv2.putText(frame, f"PHONE: {conf:.2f}", (x1, y1 - 10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -337,6 +401,8 @@ def main():
                 drowsy_start_time = None
                 yawn_start_time = None
                 distract_start_time = None
+                phone_start_time = None
+                is_phone_alert = False
                 
             else:
                 # --- Evaluation & Alerts ---
@@ -370,6 +436,16 @@ def main():
                 else:
                     yawn_start_time = None
                     is_yawn_alert = False
+
+                # 4. Mobile Phone Evaluation
+                if phone_detected_state:
+                    if phone_start_time is None:
+                        phone_start_time = time.time()
+                    elif time.time() - phone_start_time > 1.0: # alert after 1 second of phone presence
+                        is_phone_alert = True
+                else:
+                    phone_start_time = None
+                    is_phone_alert = False
 
             # --- HUD Sidebar Panels (Metrics display) ---
             # Draw overlay card for telemetry data
@@ -410,6 +486,23 @@ def main():
                     cv2.putText(frame, "DROWSY WARNING! WAKE UP!", (w // 2 - 135, h - 50),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
                     
+            elif is_phone_alert:
+                status_text = "WARNING: PHONE USAGE"
+                status_color = (0, 0, 255) # Bright Red
+                
+                # Speak warning every 4 seconds
+                if current_time - last_phone_voice_time > 4.0:
+                    speak("Do not use your mobile phone while driving.")
+                    api_new_alert = {"time": time.strftime("%H:%M:%S"), "type": "danger", "message": "Mobile phone usage detected."}
+                    last_phone_voice_time = current_time
+                
+                # Full frame red flashing border
+                if int(current_time * 4) % 2 == 0:
+                    cv2.rectangle(frame, (0, 0), (w, h), (0, 0, 255), 12)
+                    draw_overlay(frame, w // 2 - 160, h - 80, 320, 50, (0, 0, 255), 0.8)
+                    cv2.putText(frame, "PHONE USAGE DETECTED!", (w // 2 - 135, h - 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+
             elif is_distract_alert:
                 status_text = "WARNING: DRIVER DISTRACTED"
                 status_color = (0, 100, 255) # Orange
@@ -469,12 +562,19 @@ def main():
             yaw_penalty = min(50, abs(adj_yaw) / YAW_THRESHOLD * 50)
             pitch_penalty = min(50, abs(adj_pitch) / PITCH_THRESHOLD * 50)
             attention_score = int(max(0, 100 - (yaw_penalty + pitch_penalty)))
-            
-            api_face_detected = True
-            # Derive phone active state (more sensitive: tilted head down OR low attention score)
-            phone_active = True if (adj_pitch < -3.5 or attention_score < 65) else False
+            # Phone detection is its own independent alert — do NOT deduct from attention score
+            phone_active = phone_detected_state
 
-            api_status = "DROWSY" if is_drowsy_alert else "DISTRACTED" if (is_distract_alert or phone_active) else "WARNING" if (drowsiness_level > 40 or attention_score < 70) else "SAFE"
+            api_face_detected = True
+
+            # Status priority: drowsy > phone > head-pose distraction > warning > safe
+            api_status = (
+                "DROWSY"      if is_drowsy_alert else
+                "DISTRACTED"  if is_phone_alert else
+                "DISTRACTED"  if is_distract_alert else
+                "WARNING"     if (drowsiness_level > 40 or attention_score < 70) else
+                "SAFE"
+            )
             api_safety_score = max(0, 100 - (drowsiness_level * 0.5) - ((100 - attention_score) * 0.3))
             
             # Derive stress level from drowsiness and distraction
@@ -510,7 +610,7 @@ def main():
                 yaw=float(adj_yaw),
                 roll=float(roll),
                 stress_level=float(derived_stress),
-                phone_detected=phone_active,
+                phone_detected=is_phone_alert,
                 accident_detected=False,
                 emotion=emotion_state,
                 new_alert=api_new_alert
@@ -525,9 +625,11 @@ def main():
             drowsy_start_time = None
             yawn_start_time = None
             distract_start_time = None
+            phone_start_time = None
             is_drowsy_alert = False
             is_yawn_alert = False
             is_distract_alert = False
+            is_phone_alert = False
             
             # Big Warning in Center
             draw_overlay(frame, w // 2 - 160, h // 2 - 30, 320, 60, (0, 0, 0), 0.6)

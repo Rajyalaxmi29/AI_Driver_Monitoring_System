@@ -109,6 +109,10 @@ class VideoThread(QThread):
         
         # Optimization: run YOLO every N frames
         self.frame_counter = 0
+        self.phone_detected = False
+        self.phone_box = None
+        self.phone_confirm_count = 0      # consecutive YOLO windows with phone
+        self.PHONE_CONFIRM_NEEDED = 3     # must see phone 3 times in a row
 
     def run(self):
         # Open default webcam
@@ -158,26 +162,41 @@ class VideoThread(QThread):
             frame, night_mode_active = apply_night_mode_enhancement(frame, brightness_threshold=65)
             
             # --- 2. YOLOv8 Mobile Phone Detection (Every 6 frames to keep GUI lag-free) ---
-            phone_detected = False
             if self.yolo_model is not None and self.frame_counter % 6 == 0:
+                phone_detected_this_frame = False
                 try:
                     yolo_results = self.yolo_model(frame, verbose=False)
                     for r in yolo_results:
                         for box in r.boxes:
                             cls_idx = int(box.cls[0])
                             conf = float(box.conf[0])
-                            # COCO class 67 is 'cell phone'
-                            if cls_idx == 67 and conf > 0.45:
-                                phone_detected = True
+                            # COCO class 67 is 'cell phone' — high threshold to cut false positives
+                            if cls_idx == 67 and conf > 0.70:
+                                phone_detected_this_frame = True
                                 self.phone_frames += 1
-                                
-                                # Draw phone bounding box
                                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                                cv2.putText(frame, f"PHONE: {conf:.2f}", (x1, y1 - 10), 
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                self.phone_box = (x1, y1, x2, y2, conf)
+                                break
                 except Exception as e:
                     print("Warning: YOLOv8 inference failed.", flush=True)
+
+                # Require PHONE_CONFIRM_NEEDED consecutive detections before alerting
+                if phone_detected_this_frame:
+                    self.phone_confirm_count = min(
+                        self.phone_confirm_count + 1, self.PHONE_CONFIRM_NEEDED
+                    )
+                else:
+                    self.phone_confirm_count = 0
+                    self.phone_box = None   # clear stale box
+
+                self.phone_detected = (self.phone_confirm_count >= self.PHONE_CONFIRM_NEEDED)
+
+            # Draw phone bounding box on intermediate frames if detected
+            if self.phone_detected and self.phone_box is not None:
+                x1, y1, x2, y2, conf = self.phone_box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(frame, f"PHONE: {conf:.2f}", (x1, y1 - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             
             # --- 3. Face Mesh Landmark Processing ---
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -328,7 +347,7 @@ class VideoThread(QThread):
                         self.yawn_start_time = None
                         
                     # 4. Mobile Phone Evaluation
-                    if phone_detected:
+                    if self.phone_detected:
                         if self.phone_start_time is None:
                             self.phone_start_time = current_time
                         elif current_time - self.phone_start_time > 1.0: # alert after 1 second of phone presence
@@ -356,7 +375,7 @@ class VideoThread(QThread):
             
             # Fatigue and Attention scoring
             attention_score = self.calculator.calculate_attention_score(
-                avg_ear, is_drowsy_alert, adj_yaw, adj_pitch, phone_detected
+                avg_ear, is_drowsy_alert, adj_yaw, adj_pitch, self.phone_detected
             )
             fatigue_pct, fatigue_level = self.calculator.calculate_fatigue_score(
                 drowsy_duration, self.yawn_count

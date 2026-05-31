@@ -36,7 +36,7 @@ export interface DriverData {
 }
 
 // ── API endpoint ──────────────────────────────────────────────────
-const API_URL = "http://localhost:5000/api/status";
+const API_URL = "http://localhost:5005/api/status";
 
 // ── Sine-wave simulator for realistic wave shapes ──────────────────
 // Each metric has its own independent phase and speed so they move differently
@@ -126,16 +126,15 @@ export function getMockData(prevData?: DriverData): DriverData {
   // Stress level: calculated from drowsiness and distraction
   const stressLevel = Math.round(Math.max(10, Math.min(95, drowsiness * 0.5 + (100 - attention) * 0.4 + 12)));
 
-  // Phone detected: simulate a temporary phone usage
-  const isHoldingPhone = (simTick % 50 >= 42 && attention < 72);
+  // Phone detection is handled by real YOLOv8 only — never simulate it
+  const isHoldingPhone = false;
 
   // Accident detected: preserve from UI trigger
   const accidentDetected = prevData?.accidentDetected ?? false;
 
   // Emotion status: simulate NEUTRAL vs HAPPY vs TIRED vs DISTRACTED
   let emotion = "NEUTRAL";
-  if (isHoldingPhone) emotion = "DISTRACTED";
-  else if (drowsiness > 60) emotion = "TIRED";
+  if (drowsiness > 60) emotion = "TIRED";
   else if (simTick % 30 < 6) emotion = "HAPPY";
 
   return {

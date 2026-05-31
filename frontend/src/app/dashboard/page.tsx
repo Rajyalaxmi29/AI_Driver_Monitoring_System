@@ -311,7 +311,7 @@ export default function DashboardPage() {
                       To see real data, start your Python backend:{" "}
                       <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-900">python driver_monitor.py</code>
                       {" "}— make sure Flask serves at{" "}
-                      <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-900">http://localhost:5000/api/status</code>
+                      <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-900">http://localhost:5005/api/status</code>
                     </div>
                   </div>
                 </div>
