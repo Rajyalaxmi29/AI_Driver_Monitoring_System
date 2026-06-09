@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function LoginForm() {
   const router = useRouter();
@@ -48,7 +49,7 @@ export default function LoginForm() {
         </div>
 
         {/* Form */}
-        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); router.push("/inspection"); }}>
+        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); window.location.href = "/inspection"; }}>
           {mode === "signup" && (
             <div className="animate-fade-in-down delay-400">
               <InputField label="Full Name" type="text" placeholder="John Doe" />
@@ -93,12 +94,12 @@ export default function LoginForm() {
             </div>
           )}
 
-          <button
-            type="submit"
-            className="animate-fade-in delay-700 mt-2 w-full rounded-full bg-white py-3 text-xs font-semibold tracking-widest text-black uppercase hover:bg-white/90 active:scale-95 transition-all duration-300 cursor-pointer"
+          <a
+            href="/inspection"
+            className="animate-fade-in delay-700 mt-2 w-full block text-center rounded-full bg-white py-3 text-xs font-semibold tracking-widest text-black uppercase hover:bg-white/90 active:scale-95 transition-all duration-300 cursor-pointer"
           >
             {mode === "login" ? "Sign In →" : "Create Account →"}
-          </button>
+          </a>
 
           {/* Divider */}
           <div className="animate-fade-in delay-800 flex items-center gap-4 my-1">
