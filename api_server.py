@@ -6,13 +6,22 @@ Install: pip install flask flask-cors
 Run:     python api_server.py
 """
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading
 import time
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend (localhost:3000) to fetch from here
+
+# Import alert module (graceful fallback if twilio not installed)
+try:
+    from emergency_alerts import send_family_sms, reset_alert_state
+    ALERTS_AVAILABLE = True
+except ImportError:
+    ALERTS_AVAILABLE = False
+    def send_family_sms(**kwargs): return {"success": False, "reason": "module_not_found"}
+    def reset_alert_state(): pass
 
 # ── Shared state (updated by your driver_monitor.py loop) ─────────
 driver_state = {
@@ -42,6 +51,50 @@ session_start = time.time()
 def get_status():
     driver_state["session_seconds"] = int(time.time() - session_start)
     return jsonify(driver_state)
+
+
+@app.route("/api/emergency", methods=["POST"])
+def trigger_emergency():
+    """Called by frontend when crash is confirmed. Sends real SMS alerts."""
+    body = request.get_json(force=True, silent=True) or {}
+    lat          = body.get("lat", 0.0)
+    lng          = body.get("lng", 0.0)
+    family_phone = body.get("familyPhone", "").strip()
+    family_name  = body.get("familyName",  "Family Member")
+
+    # Fall back to .env FAMILY_PHONE if frontend didn't send one
+    if not family_phone:
+        import os
+        family_phone = os.getenv("FAMILY_PHONE", "")
+        print(f"[API] Using FAMILY_PHONE from .env: {family_phone}", flush=True)
+
+    print(f"[API] /api/emergency called — lat={lat}, lng={lng}, to={family_name}", flush=True)
+
+    # Only SMS to family member for now (hospital & police: coming later)
+    results = send_family_sms(
+        family_phone=family_phone,
+        family_name=family_name,
+        lat=lat,
+        lng=lng,
+    )
+
+    # Also flag accident in shared driver state
+    driver_state["accident_detected"] = True
+    driver_state["alerts"].insert(0, {
+        "time": time.strftime("%H:%M:%S"),
+        "type": "danger",
+        "message": "💥 CRASH DETECTED — Emergency alerts dispatched!"
+    })
+
+    return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/reset-emergency", methods=["POST"])
+def reset_emergency():
+    """Resets the alert state so future crashes can trigger again."""
+    driver_state["accident_detected"] = False
+    reset_alert_state()
+    return jsonify({"ok": True})
 
 # ── Call this from your driver_monitor.py to update state ─────────
 def update_driver_state(

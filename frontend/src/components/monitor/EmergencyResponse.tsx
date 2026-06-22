@@ -2,31 +2,148 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Siren, ShieldAlert, Phone, MapPin, CheckCircle, RefreshCw, Send, AlertTriangle } from "lucide-react";
+import { Siren, ShieldAlert, Phone, MapPin, CheckCircle, RefreshCw, Send, AlertTriangle, Loader2, Navigation } from "lucide-react";
 import { type DriverData } from "@/services/driverData";
+import dynamic from 'next/dynamic';
+
+const MapWidget = dynamic(() => import('./MapWidget'), { ssr: false });
 
 interface EmergencyResponseProps {
   data: DriverData;
   setData: (d: DriverData) => void;
 }
 
+interface NearbyPlace {
+  name: string;
+  distance: number; // metres
+  address?: string;
+}
+
+async function fetchNearby(lat: number, lng: number, amenity: string): Promise<NearbyPlace | null> {
+  const radius = 10000; // 10 km search radius
+  const query = `
+    [out:json][timeout:10];
+    (
+      node["amenity"="${amenity}"](around:${radius},${lat},${lng});
+      way["amenity"="${amenity}"](around:${radius},${lat},${lng});
+    );
+    out center 5;
+  `;
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    body: query,
+  });
+  const json = await res.json();
+  if (!json.elements || json.elements.length === 0) return null;
+
+  // Sort by distance to user
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const haversine = (lat2: number, lng2: number) => {
+    const R = 6371000;
+    const dLat = toRad(lat2 - lat);
+    const dLng = toRad(lng2 - lng);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
+
+  const sorted = json.elements
+    .map((el: any) => {
+      const elLat = el.lat ?? el.center?.lat;
+      const elLng = el.lon ?? el.center?.lon;
+      return {
+        name: el.tags?.name || el.tags?.["name:en"] || `Unnamed ${amenity}`,
+        address: el.tags?.["addr:street"] ?? el.tags?.["addr:full"] ?? "",
+        distance: haversine(elLat, elLng),
+        lat: elLat,
+        lng: elLng,
+      };
+    })
+    .sort((a: any, b: any) => a.distance - b.distance);
+
+  return sorted[0] ?? null;
+}
+
 export default function EmergencyResponse({ data, setData }: EmergencyResponseProps) {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isAlerting, setIsAlerting] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
+  const [alertDispatchStatus, setAlertDispatchStatus] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   
-  // Contacts State
-  const [familyPhone, setFamilyPhone] = useState("+1 (555) 019-2834");
-  const [familyContact, setFamilyContact] = useState("Sarah (Wife)");
-  const [hospital, setHospital] = useState("Mercy General Hospital (Emergency Wing)");
-  const [policeDept, setPoliceDept] = useState("Central Police Department (Traffic Dispatch)");
+  const [familyPhone, setFamilyPhone] = useState("+916304098267");
+  const [familyContact, setFamilyContact] = useState("Family Member");
+  const [hospital, setHospital] = useState("");
+  const [policeDept, setPoliceDept] = useState("");
+  const [hospitalInfo, setHospitalInfo] = useState<NearbyPlace | null>(null);
+  const [policeInfo, setPoliceInfo] = useState<NearbyPlace | null>(null);
+  const [loadingHospital, setLoadingHospital] = useState(false);
+  const [loadingPolice, setLoadingPolice] = useState(false);
+  const [nearbyError, setNearbyError] = useState<string | null>(null);
 
-  // GPS coordinates (simulating a slight driving drift)
   const [gps, setGps] = useState({ lat: 37.774929, lng: -122.419416 });
+  const [hasRealGps, setHasRealGps] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // Drifting coordinates
+    if ("geolocation" in navigator) {
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          setGps({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+          setHasRealGps(true);
+        },
+        (error) => console.error("GPS Error:", error),
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+      );
+      return () => navigator.geolocation.clearWatch(watchId);
+    }
+  }, []);
+
+  // Fetch nearest hospital + police station whenever real GPS is acquired
+  useEffect(() => {
+    if (!hasRealGps) return;
+    let cancelled = false;
+
+    const lookupNearby = async () => {
+      setLoadingHospital(true);
+      setLoadingPolice(true);
+      setNearbyError(null);
+      try {
+        const [hosp, police] = await Promise.all([
+          fetchNearby(gps.lat, gps.lng, "hospital"),
+          fetchNearby(gps.lat, gps.lng, "police"),
+        ]);
+        if (cancelled) return;
+        if (hosp) {
+          setHospitalInfo(hosp);
+          setHospital(hosp.name);
+        }
+        if (police) {
+          setPoliceInfo(police);
+          setPoliceDept(police.name);
+        }
+      } catch (e) {
+        if (!cancelled) setNearbyError("Could not fetch nearby services. Check internet.");
+      } finally {
+        if (!cancelled) {
+          setLoadingHospital(false);
+          setLoadingPolice(false);
+        }
+      }
+    };
+
+    lookupNearby();
+    return () => { cancelled = true; };
+  // Only re-fetch when real GPS is first obtained or every ~500m change (round to 3dp)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasRealGps, Math.round(gps.lat * 100) / 100, Math.round(gps.lng * 100) / 100]);
+
+  useEffect(() => {
+    // Drifting fallback if no real GPS
+    if (hasRealGps) return;
     const interval = setInterval(() => {
       setGps(prev => ({
         lat: prev.lat + (Math.random() - 0.5) * 0.0001,
@@ -34,7 +151,7 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
       }));
     }, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [hasRealGps]);
 
   // Handle countdown logic
   useEffect(() => {
@@ -43,18 +160,48 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
       setCountdown(null);
       setIsAlerting(true);
       setIsCancelled(false);
-      
+
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance("Crash detected. Dispatching S. O. S. and emergency services to your location.");
+        window.speechSynthesis.speak(msg);
+      }
+
+      // ── Call real backend to send SMS alerts ──────────────────────
+      setAlertDispatchStatus("sending");
+      fetch("/api/emergency", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lat: gps.lat,
+          lng: gps.lng,
+          familyPhone: familyPhone,
+          familyName: familyContact,
+          hospital: hospital,
+          police: policeDept,
+        }),
+      })
+        .then(r => r.json())
+        .then(result => {
+          console.log("[Emergency] Alert dispatch result:", result);
+          setAlertDispatchStatus("sent");
+        })
+        .catch(err => {
+          console.error("[Emergency] Alert dispatch failed:", err);
+          setAlertDispatchStatus("failed");
+        });
+
       // Update global state with accident trigger
       setData({
         ...data,
         accidentDetected: true,
-        status: "DROWSY", // Set to critical status
+        status: "DROWSY",
         alerts: [
           {
             id: `accident-${Date.now()}`,
             time: new Date().toLocaleTimeString("en-US", { hour12: false }),
             type: "danger",
-            message: "💥 COLLISION IMPACT DETECTED! Emergency auto-responses dispatched."
+            message: "💥 COLLISION IMPACT DETECTED! SMS alert dispatched to family."
           },
           ...data.alerts
         ]
@@ -75,6 +222,12 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
     setIsAlerting(false);
     setIsCancelled(false);
     setCountdown(5); // 5 seconds countdown
+    
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const msg = new SpeechSynthesisUtterance("Warning. High G impact detected. Auto response dispatching in 5 seconds.");
+      window.speechSynthesis.speak(msg);
+    }
   };
 
   const cancelEmergencyResponse = () => {
@@ -82,12 +235,21 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
     setCountdown(null);
     setIsCancelled(true);
     setTimeout(() => setIsCancelled(false), 3000);
+    
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const msg = new SpeechSynthesisUtterance("Auto response cancelled.");
+      window.speechSynthesis.speak(msg);
+    }
   };
 
   const resetEmergencySystem = () => {
     setIsAlerting(false);
     setIsCancelled(false);
     setCountdown(null);
+    setAlertDispatchStatus("idle");
+    // Reset backend alert state
+    fetch("/api/reset-emergency", { method: "POST" }).catch(() => {});
     setData({
       ...data,
       accidentDetected: false,
@@ -242,26 +404,18 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
                 </span>
               </div>
               
-              <div className="h-28 bg-gray-200 rounded-lg relative overflow-hidden border border-gray-300 flex items-center justify-center">
-                {/* Mock Map Background Grid */}
-                <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#000_1px,transparent_1px)] [background-size:16px_16px]" />
-                
-                {/* Simulated Roads */}
-                <div className="absolute w-[2px] h-full bg-white left-1/3 rotate-12" />
-                <div className="absolute w-[2px] h-full bg-white left-2/3 -rotate-45" />
-                <div className="absolute h-[2px] w-full bg-white top-1/2" />
-                
-                {/* User Pin */}
-                <motion.div
-                  animate={{ scale: [1, 1.4, 1] }}
-                  transition={{ repeat: Infinity, duration: 1.5 }}
-                  className="w-4 h-4 bg-blue-600 border-2 border-white rounded-full relative z-10 flex items-center justify-center shadow-lg"
-                >
-                  <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                </motion.div>
-                <div className="absolute bottom-2 left-2 text-[9px] bg-black/60 text-white px-1.5 py-0.5 rounded font-mono">
-                  Map: SF Downtown (Drifting)
-                </div>
+              <div className="h-40 bg-gray-200 rounded-lg relative overflow-hidden border border-gray-300 flex items-center justify-center">
+                <MapWidget lat={gps.lat} lng={gps.lng} />
+                {!hasRealGps && (
+                  <div className="absolute top-2 right-2 text-[9px] bg-amber-500/90 backdrop-blur text-white px-2 py-1 rounded font-bold z-[400] shadow-sm uppercase tracking-wide">
+                    Simulated GPS (Awaiting Permission)
+                  </div>
+                )}
+                {hasRealGps && (
+                  <div className="absolute bottom-2 left-2 text-[9px] bg-green-600/90 backdrop-blur text-white px-2 py-1 rounded font-bold z-[400] shadow-sm uppercase tracking-wide flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse block"></span> Live GPS Active
+                  </div>
+                )}
               </div>
             </div>
 
@@ -320,10 +474,22 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
 
       {/* Emergency Contacts Form Panel */}
       <div className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
+        <h3 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
           <Phone className="w-5 h-5 text-gray-700" />
           Emergency Contact Setup
         </h3>
+        <p className="text-xs text-gray-400 mb-4">
+          {hasRealGps
+            ? "Nearest hospital & police station auto-detected from your live GPS."
+            : "Allow location access to auto-detect nearest hospital & police station."}
+        </p>
+
+        {nearbyError && (
+          <div className="mb-4 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" /> {nearbyError}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Family Emergency Contact</label>
@@ -345,26 +511,64 @@ export default function EmergencyResponse({ data, setData }: EmergencyResponsePr
             </div>
           </div>
 
+          {/* Nearest Hospital */}
           <div className="space-y-1.5">
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Default Trauma Center</label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Nearest Trauma Center</label>
+              {loadingHospital && <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />}
+              {!loadingHospital && hospitalInfo && (
+                <span className="text-[10px] bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                  <Navigation className="w-2.5 h-2.5" />
+                  {hospitalInfo.distance < 1000
+                    ? `${Math.round(hospitalInfo.distance)}m away`
+                    : `${(hospitalInfo.distance / 1000).toFixed(1)}km away`}
+                </span>
+              )}
+            </div>
             <input
               type="text"
               value={hospital}
               onChange={(e) => setHospital(e.target.value)}
-              className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 w-full focus:outline-none focus:border-blue-500 transition"
-              placeholder="Hospital name"
+              className={`border rounded-xl px-3 py-2 text-sm text-gray-700 w-full focus:outline-none transition ${
+                hospitalInfo
+                  ? "bg-green-50 border-green-300 focus:border-green-500"
+                  : "bg-gray-50 border-gray-200 focus:border-blue-500"
+              }`}
+              placeholder={loadingHospital ? "Searching nearby..." : "Hospital name"}
             />
+            {hospitalInfo?.address && (
+              <p className="text-[10px] text-gray-400 truncate">{hospitalInfo.address}</p>
+            )}
           </div>
 
+          {/* Nearest Police Station */}
           <div className="space-y-1.5">
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Local Police Dispatch</label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Nearest Police Station</label>
+              {loadingPolice && <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />}
+              {!loadingPolice && policeInfo && (
+                <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                  <Navigation className="w-2.5 h-2.5" />
+                  {policeInfo.distance < 1000
+                    ? `${Math.round(policeInfo.distance)}m away`
+                    : `${(policeInfo.distance / 1000).toFixed(1)}km away`}
+                </span>
+              )}
+            </div>
             <input
               type="text"
               value={policeDept}
               onChange={(e) => setPoliceDept(e.target.value)}
-              className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 w-full focus:outline-none focus:border-blue-500 transition"
-              placeholder="Police department"
+              className={`border rounded-xl px-3 py-2 text-sm text-gray-700 w-full focus:outline-none transition ${
+                policeInfo
+                  ? "bg-blue-50 border-blue-300 focus:border-blue-500"
+                  : "bg-gray-50 border-gray-200 focus:border-blue-500"
+              }`}
+              placeholder={loadingPolice ? "Searching nearby..." : "Police department"}
             />
+            {policeInfo?.address && (
+              <p className="text-[10px] text-gray-400 truncate">{policeInfo.address}</p>
+            )}
           </div>
         </div>
       </div>

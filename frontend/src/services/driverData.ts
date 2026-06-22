@@ -36,7 +36,7 @@ export interface DriverData {
 }
 
 // ── API endpoint ──────────────────────────────────────────────────
-const API_URL = "http://localhost:5005/api/status";
+const API_URL = "/api/status";
 
 // ── Sine-wave simulator for realistic wave shapes ──────────────────
 // Each metric has its own independent phase and speed so they move differently
@@ -202,8 +202,8 @@ export function seedHistory(count = 30): {
 
 export async function fetchDriverData(prev?: DriverData): Promise<DriverData> {
   try {
-    const res = await fetch(API_URL, { signal: AbortSignal.timeout(800) });
-    if (!res.ok) throw new Error("Non-200");
+    const res = await fetch(API_URL, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const raw = await res.json();
 
     const parseBool = (val: any, def: boolean) => {
@@ -234,7 +234,6 @@ export async function fetchDriverData(prev?: DriverData): Promise<DriverData> {
     const stressLevel = parseNum(raw.stress_level ?? raw.stressLevel, 15);
     const phoneDetected = parseBool(raw.phone_detected ?? raw.phoneDetected, false);
     const accidentDetected = parseBool(raw.accident_detected ?? raw.accidentDetected, false);
-
     const emotion = raw.emotion ?? "NEUTRAL";
 
     return {
@@ -265,7 +264,12 @@ export async function fetchDriverData(prev?: DriverData): Promise<DriverData> {
       connected: true,
       raw: raw,
     };
-  } catch {
+  } catch (err) {
+    // Only log once to avoid spam
+    if (typeof window !== "undefined" && !(window as any).__dmsWarnedOffline) {
+      console.warn("[DMS] Backend not reachable, using demo data.", err);
+      (window as any).__dmsWarnedOffline = true;
+    }
     return getMockData(prev);
   }
 }

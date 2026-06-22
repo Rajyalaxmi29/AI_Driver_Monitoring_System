@@ -144,16 +144,16 @@ def main():
     detector = vision.FaceLandmarker.create_from_options(options)
     print("MediaPipe Face Landmarker initialized.", flush=True)
 
-    # Initialize YOLOv8 Model (downloads automatically if not cached)
+    # Initialize YOLOv8 Model - use 'small' (s) for better accuracy than nano (n)
     yolo_model = None
     if YOLO_AVAILABLE:
         try:
-            print("Initializing YOLOv8 model...", flush=True)
-            yolo_model = YOLO("yolov8n.pt")
-            print("YOLOv8 model initialized.", flush=True)
+            print("Initializing YOLOv8s model (accurate phone detection)...", flush=True)
+            yolo_model = YOLO("yolov8s.pt")  # 'small' model — much more accurate than 'nano'
+            print("YOLOv8s model initialized.", flush=True)
         except Exception as e:
             yolo_model = None
-            print("Warning: YOLOv8 model initialization failed.", flush=True)
+            print(f"Warning: YOLOv8 model initialization failed: {e}", flush=True)
 
     # State variables for warning timers
     drowsy_start_time = None
@@ -165,11 +165,13 @@ def main():
     is_yawn_alert = False
     is_distract_alert = False
     is_phone_alert = False
+    is_accident_alert = False
+    accident_start_time = None
 
     phone_detected_state = False
     phone_box_coords = None
     phone_confirm_count = 0          # consecutive YOLO windows where phone seen
-    PHONE_CONFIRM_NEEDED = 3         # require 3 consecutive detections before alerting
+    PHONE_CONFIRM_NEEDED = 1         # require 1 consecutive detection before alerting (changed from 3 for responsiveness)
     frame_counter = 0
 
     # API tracking variables
@@ -204,6 +206,7 @@ def main():
     print("=========================================", flush=True)
     print("Controls:", flush=True)
     print("  Press 'c' to Calibrate baseline face pose.", flush=True)
+    print("  Press 'e' to Simulate High-G Emergency Impact.", flush=True)
     print("  Press 'q' to Quit the program.", flush=True)
     print("=========================================\n", flush=True)
 
@@ -221,39 +224,55 @@ def main():
         frame = cv2.flip(frame, 1)
         h, w, _ = frame.shape
         
-        # --- YOLOv8 Mobile Phone Detection (Every 6 frames to keep GUI/detection loop lag-free) ---
-        if yolo_model is not None and frame_counter % 6 == 0:
+        # --- YOLOv8 Phone Detection (every frame, full resolution, enhanced preprocessing) ---
+        if yolo_model is not None:
             phone_detected_this_frame = False
             try:
-                yolo_results = yolo_model(frame, verbose=False)
+                # Enhance image contrast/brightness before inference to help in low-light
+                detection_frame = cv2.convertScaleAbs(frame, alpha=1.3, beta=20)
+
+                # Run with imgsz=640 (standard, best accuracy) and low confidence threshold
+                yolo_results = yolo_model(detection_frame, imgsz=640, conf=0.20, verbose=False)
                 for r in yolo_results:
                     for box in r.boxes:
                         cls_idx = int(box.cls[0])
                         conf = float(box.conf[0])
-                        # COCO class 67 is 'cell phone' — use high threshold to reduce false positives
-                        if cls_idx == 67 and conf > 0.70:
-                            phone_detected_this_frame = True
-                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            phone_box_coords = (x1, y1, x2, y2, conf)
-                            break
-            except Exception as e:
-                print("Warning: YOLOv8 inference failed.", flush=True)
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        class_name = yolo_model.names.get(cls_idx, str(cls_idx))
 
-            # Require PHONE_CONFIRM_NEEDED consecutive detections before raising alert
+                        # Draw ALL non-person detections in grey for visibility/debugging
+                        if class_name != "person":
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (120, 120, 120), 1)
+                            cv2.putText(frame, f"{class_name} {conf:.2f}",
+                                        (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
+
+                        # Phone classes: 67=cell phone, 65=remote, 63=laptop, 73=book (hand-held)
+                        # Laptop included because drivers sometimes prop phones like laptops
+                        PHONE_CLASSES = {67, 65}
+                        if cls_idx in PHONE_CLASSES and conf > 0.20:
+                            phone_detected_this_frame = True
+                            phone_box_coords = (x1, y1, x2, y2, conf, class_name)
+            except Exception as e:
+                print(f"Warning: YOLOv8 inference failed: {e}", flush=True)
+
             if phone_detected_this_frame:
                 phone_confirm_count = min(phone_confirm_count + 1, PHONE_CONFIRM_NEEDED)
             else:
-                phone_confirm_count = 0
-                phone_box_coords = None   # clear stale box immediately
+                phone_confirm_count = max(0, phone_confirm_count - 1)  # decay slowly instead of instant reset
+                if phone_confirm_count == 0:
+                    phone_box_coords = None
 
             phone_detected_state = (phone_confirm_count >= PHONE_CONFIRM_NEEDED)
 
-        # Draw phone bounding box on intermediate frames if detected
+        # Draw phone bounding box (bright red, prominent)
         if phone_detected_state and phone_box_coords is not None:
-            x1, y1, x2, y2, conf = phone_box_coords
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            cv2.putText(frame, f"PHONE: {conf:.2f}", (x1, y1 - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            x1, y1, x2, y2 = phone_box_coords[0], phone_box_coords[1], phone_box_coords[2], phone_box_coords[3]
+            conf = phone_box_coords[4]
+            label = phone_box_coords[5] if len(phone_box_coords) > 5 else "phone"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.rectangle(frame, (x1, y1 - 28), (x1 + 180, y1), (0, 0, 255), -1)
+            cv2.putText(frame, f"PHONE DETECTED {conf:.0%}", (x1 + 4, y1 - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
         
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -403,6 +422,7 @@ def main():
                 distract_start_time = None
                 phone_start_time = None
                 is_phone_alert = False
+                is_accident_alert = False
                 
             else:
                 # --- Evaluation & Alerts ---
@@ -469,7 +489,28 @@ def main():
             
             # --- Alert Styling & Voice Assistant rate-limiting ---
             current_time = time.time()
-            if is_drowsy_alert:
+            if is_accident_alert:
+                status_text = "EMERGENCY: HIGH-G IMPACT DETECTED"
+                status_color = (0, 0, 255) # Bright Red
+                
+                # Speak warning once
+                if accident_start_time and current_time - accident_start_time < 5.0:
+                    api_new_alert = {"time": time.strftime("%H:%M:%S"), "type": "danger", "message": "CRASH DETECTED! Deploying emergency services."}
+                
+                # Full frame red flashing border
+                if int(current_time * 8) % 2 == 0:
+                    cv2.rectangle(frame, (0, 0), (w, h), (0, 0, 255), 20)
+                    draw_overlay(frame, w // 2 - 200, h // 2 - 60, 400, 120, (0, 0, 255), 0.9)
+                    cv2.putText(frame, "CRASH DETECTED!", (w // 2 - 160, h // 2 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3, cv2.LINE_AA)
+                    cv2.putText(frame, "DISPATCHING SOS...", (w // 2 - 120, h // 2 + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                
+                # Auto-reset after 5 seconds
+                if accident_start_time and current_time - accident_start_time > 5.0:
+                    is_accident_alert = False
+
+            elif is_drowsy_alert:
                 status_text = "WARNING: DROWSINESS DETECTED"
                 status_color = (0, 0, 255) # Bright Red
                 
@@ -567,8 +608,9 @@ def main():
 
             api_face_detected = True
 
-            # Status priority: drowsy > phone > head-pose distraction > warning > safe
+            # Status priority: crash > drowsy > phone > head-pose distraction > warning > safe
             api_status = (
+                "CRASH"       if is_accident_alert else
                 "DROWSY"      if is_drowsy_alert else
                 "DISTRACTED"  if is_phone_alert else
                 "DISTRACTED"  if is_distract_alert else
@@ -611,7 +653,7 @@ def main():
                 roll=float(roll),
                 stress_level=float(derived_stress),
                 phone_detected=is_phone_alert,
-                accident_detected=False,
+                accident_detected=is_accident_alert,
                 emotion=emotion_state,
                 new_alert=api_new_alert
             )
@@ -630,6 +672,7 @@ def main():
             is_yawn_alert = False
             is_distract_alert = False
             is_phone_alert = False
+            is_accident_alert = False
             
             # Big Warning in Center
             draw_overlay(frame, w // 2 - 160, h // 2 - 30, 320, 60, (0, 0, 0), 0.6)
@@ -651,7 +694,7 @@ def main():
                 roll=0.0,
                 stress_level=0.0,
                 phone_detected=False,
-                accident_detected=False,
+                accident_detected=is_accident_alert if 'is_accident_alert' in locals() else False,
                 emotion="NEUTRAL"
             )
 
@@ -687,6 +730,10 @@ def main():
             calibration_ear_sum = 0.0
             calibration_yaw_sum = 0.0
             calibration_pitch_sum = 0.0
+        elif key == ord('e'):
+            is_accident_alert = True
+            accident_start_time = time.time()
+            speak("Emergency. High-G impact detected. Dispatching SOS.")
 
     # Cleanup
     detector.close()
