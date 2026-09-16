@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import time
@@ -125,8 +126,10 @@ def draw_contour(image, landmarks, indices, color, w, h, is_closed=True):
 def main():
     global EAR_THRESHOLD, YAW_THRESHOLD, PITCH_THRESHOLD
     
-    # Initialize Camera
-    cap = cv2.VideoCapture(0)
+    # Initialize Camera (Use DirectShow on Windows for instant, reliable webcam startup)
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Could not access the webcam.", flush=True)
         return
@@ -135,7 +138,16 @@ def main():
 
     # Initialize MediaPipe Face Landmarker via Tasks API
     print("Initializing MediaPipe Face Landmarker...", flush=True)
-    base_options = python.BaseOptions(model_asset_path='face_landmarker.task')
+    task_model = 'face_landmarker.task'
+    if not os.path.exists(task_model):
+        print(f"Model asset '{task_model}' not found, downloading...", flush=True)
+        import urllib.request
+        urllib.request.urlretrieve(
+            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            task_model
+        )
+        print("MediaPipe model downloaded successfully.", flush=True)
+    base_options = python.BaseOptions(model_asset_path=task_model)
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
         num_faces=1,
@@ -144,16 +156,17 @@ def main():
     detector = vision.FaceLandmarker.create_from_options(options)
     print("MediaPipe Face Landmarker initialized.", flush=True)
 
-    # Initialize YOLOv8 Model - use 'small' (s) for better accuracy than nano (n)
+    # Initialize YOLOv8 Model - check for local weights (yolov8s.pt or yolov8n.pt)
     yolo_model = None
     if YOLO_AVAILABLE:
         try:
-            print("Initializing YOLOv8s model (accurate phone detection)...", flush=True)
-            yolo_model = YOLO("yolov8s.pt")  # 'small' model — much more accurate than 'nano'
-            print("YOLOv8s model initialized.", flush=True)
+            model_name = "yolov8s.pt" if os.path.exists("yolov8s.pt") else ("yolov8n.pt" if os.path.exists("yolov8n.pt") else "yolov8s.pt")
+            print(f"Initializing YOLO model ({model_name})...", flush=True)
+            yolo_model = YOLO(model_name)
+            print("YOLO model initialized.", flush=True)
         except Exception as e:
             yolo_model = None
-            print(f"Warning: YOLOv8 model initialization failed: {e}", flush=True)
+            print(f"Warning: YOLO model initialization failed: {e}", flush=True)
 
     # State variables for warning timers
     drowsy_start_time = None
